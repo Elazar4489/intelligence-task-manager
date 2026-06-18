@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from database.agent_db import AgentDB
 from database.mission_db import MissionDB
+import routes.agent_routes
 import logging
 
 
@@ -10,7 +11,8 @@ class IDNotFoundError(Exception):
     pass
 class StatusError(Exception):
     pass
-
+class AgentNotActiveError(Exception):
+    pass
 
 
 logger = logging.getLogger()
@@ -60,11 +62,120 @@ def get_mission_by_id(id: int):
     logger.info("")
     return mission
 
+@router.put("/{id}/assign/{agent_id}")
+def assigned_mission(id: int, agent_id: int):
+    logger.info("")
+    try:
+        check_id_if_exists(id)
+
+    except IDNotFoundError:
+        logger.error("")
+        raise HTTPException(status_code=404)
+    try:
+        check_id_if_exists2(agent_id)
+    except IDNotFoundError:
+        logger.error("")
+        raise HTTPException(status_code=404)
+    try:
+        check_other(agent_id, id)
+    except AgentNotActiveError:
+        logger.error("")
+        raise HTTPException(status_code=400, detail="not active")
+    except StatusError:
+        logger.error("")
+        raise HTTPException(status_code=400, detail="not NEW")
+    except OutAllowRange:
+        logger.error("")
+        raise HTTPException(status_code=400, detail="too much missions")
+    except ValueError:
+        logger.error("")
+        raise HTTPException(status_code=400, detail="not Commander")
+    logger.info("")
+    db_missions.assign_mission(id, agent_id)
+    db_missions.update_mission_status(id, "ASSIGNED")
+    logger.info("")
+    return "done"
+
+@router.put("/{id}/start")
+def start_mission(id: int):
+    logger.info("")
+    try:
+        check_id_if_exists(id)
+    except IDNotFoundError:
+        logger.error("")
+        raise HTTPException(status_code=404)
+    missions = db_missions.get_mission_by_id(id)
+    try:
+        check_status(missions["status"], 'IN_PROGRESS')
+    except StatusError:
+        logger.error("")
+        raise HTTPException(status_code=400)
+    logger.info("")
+    db_missions.update_mission_status(id, 'IN_PROGRESS')
+    logger.info("")
+    return "done"
 
 
+@router.put("/{id}/complete")
+def complete_mission(id: int):
+    logger.info("")
+    try:
+        check_id_if_exists(id)
+    except IDNotFoundError:
+        logger.error("")
+        raise HTTPException(status_code=404)
+    missions = db_missions.get_mission_by_id(id)
+    try:
+        check_status(missions["status"], 'COMPLETED')
+    except StatusError:
+        logger.error("")
+        raise HTTPException(status_code=400)
+    logger.info("")
+    db_missions.update_mission_status(id, 'COMPLETED')
+    id_agent=db_missions.get_mission_by_id(id)["assigned_agent_id"]
+    db_agent.increment_completed(id_agent)
+    logger.info("")
+    return "done"
 
+@router.put("/{id}/fail")
+def fail_mission(id: int):
+    logger.info("")
+    try:
+        check_id_if_exists(id)
+    except IDNotFoundError:
+        logger.error("")
+        raise HTTPException(status_code=404)
+    missions = db_missions.get_mission_by_id(id)
+    try:
+        check_status(missions["status"], 'FAILED')
+    except StatusError:
+        logger.error("")
+        raise HTTPException(status_code=400)
+    logger.info("")
+    db_missions.update_mission_status(id, 'FAILED')
+    id_agent = db_missions.get_mission_by_id(id)["assigned_agent_id"]
+    db_agent.increment_failed(id_agent)
+    logger.info("")
+    return "done"
 
-
+@router.put("/{id}/cancel")
+def cancel_mission(id: int):
+    logger.info("")
+    try:
+        check_id_if_exists(id)
+    except IDNotFoundError:
+        logger.error("")
+        raise HTTPException(status_code=404)
+    missions = db_missions.get_mission_by_id(id)
+    try:
+        check_status(missions["status"], 'CANCELLED')
+    except StatusError:
+        logger.error("")
+        raise HTTPException(400)
+    logger.info("")
+    db_missions.update_mission_status(id, 'CANCELLED')
+    logger.info("")
+    return "done"
 
 
 
@@ -139,6 +250,21 @@ def check_id_if_exists(id: int) -> bool:
         cursor.close()
         conn.close()
 
+def check_id_if_exists2(id: int) -> bool:
+    conn = db_missions.connection.get_connection()
+    cursor = conn.cursor()
+    try:
+        sql = """
+              SELECT id FROM missions;
+              """
+        cursor.execute(sql)
+        ids = [i[0] for i in cursor.fetchall()]
+        if id not in ids:
+            raise IDNotFoundError
+        return True
+    finally:
+        cursor.close()
+        conn.close()
 def calculating_risk_level(difficulty, importance):
     num_level = difficulty * 2 + importance
     risk_level = ""
@@ -153,7 +279,30 @@ def calculating_risk_level(difficulty, importance):
     return risk_level
 
 def check_status_valid(status):
-    statuses = ["NEW", "ASSIGNED", "PROGRESS_IN", "COMPLETED", "FAILED", "CANCELLED"]
+    statuses = ["NEW", "ASSIGNED", "IN_PROGRESS", "COMPLETED", "FAILED", "CANCELLED"]
     if status not in statuses:
+        raise StatusError
+    return True
+
+
+def check_other(agent_id, mission_id):
+    agent = db_agent.get_agent_by_id(agent_id)
+    mission = db_missions.get_mission_by_id(mission_id)
+    if not agent["is_active"]:
+        raise AgentNotActiveError
+    if mission["status"] != "NEW":
+        raise StatusError
+    if db_missions.get_open_missions_by_agent(agent_id)["open"] > 2:
+        raise OutAllowRange
+    if agent["agent_rank"] != "Commander" and mission["risk_level"] == "CRITICAL":
+        raise ValueError
+    return True
+
+def check_status(old_status, new_status):
+    if new_status == "IN_PROGRESS" and old_status != "ASSIGNED":
+        raise StatusError
+    if (new_status == "COMPLETED" or new_status == "FAILED") and old_status != "IN_PROGRESS":
+        raise StatusError
+    if new_status == "CANCELLED" and (old_status != "ASSIGNED" and old_status != "NEW"):
         raise StatusError
     return True

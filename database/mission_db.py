@@ -63,7 +63,51 @@ class MissionDB:
 
 
     def assign_mission(self, m_id, a_id):
-        pass
+        conn = self.connection.get_connection()
+        cursor = conn.cursor(dictionary=True)
+        try:
+            sql = """
+                  UPDATE missions SET `assigned_agent_id` = %s WHERE `id` = %s;
+                  """
+            cursor.execute(sql, (a_id, m_id))
+            conn.commit()
+            return "done"
+        finally:
+            cursor.close()
+            conn.close()
+
+
+    def update_mission_status(self, id, status):
+        conn = self.connection.get_connection()
+        cursor = conn.cursor(dictionary=True)
+        try:
+            sql = """
+                  UPDATE missions \
+                  SET `status` = %s \
+                  WHERE `id` = %s; \
+                  """
+            cursor.execute(sql, (status, id))
+            conn.commit()
+            return "done"
+        finally:
+            cursor.close()
+            conn.close()
+
+    def get_open_missions_by_agent(self, id):
+        conn = self.connection.get_connection()
+        cursor = conn.cursor(dictionary=True)
+        try:
+            sql = """
+                  SELECT COUNT(`assigned_agent_id`) AS 'open'
+                  FROM missions
+                  WHERE `assigned_agent_id` = %s AND (`status` = %s OR `status` = %s);
+                  """
+            cursor.execute(sql ,(id, 'ASSIGNED', 'IN_PROGRESS'))
+            open_missions = cursor.fetchone()
+            return open_missions
+        finally:
+            cursor.close()
+            conn.close()
 
 
     def count_all_missions(self):
@@ -71,7 +115,7 @@ class MissionDB:
         cursor = conn.cursor(dictionary=True)
         try:
             sql = """
-            SELECT COUNT(*) FROM missions;
+            SELECT COUNT(*) AS 'o' FROM missions;
             """
             cursor.execute(sql)
             all_missions = cursor.fetchone()
@@ -81,14 +125,12 @@ class MissionDB:
             conn.close()
 
     def count_by_status(self, status):
-        if not self.check_status_valid(status):
-            raise StatusError
 
         conn = self.connection.get_connection()
         cursor = conn.cursor(dictionary=True)
         try:
             sql = """
-                  SELECT COUNT(*) FROM missions WHERE `status` = %s;
+                  SELECT COUNT(*) AS 's' FROM missions WHERE `status` = %s;
                   """
             cursor.execute(sql, (status,))
             by_status = cursor.fetchone()
@@ -102,7 +144,7 @@ class MissionDB:
         cursor = conn.cursor(dictionary=True)
         try:
             sql = """
-                  SELECT COUNT(*) \
+                  SELECT COUNT(*) AS 'o'\
                   FROM missions \
                   WHERE `status` = %s OR %s; \
                   """
@@ -118,7 +160,7 @@ class MissionDB:
         cursor = conn.cursor(dictionary=True)
         try:
             sql = """
-                  SELECT COUNT(*) \
+                  SELECT COUNT(*) AS 'c'\
                   FROM missions \
                   WHERE `risk_level` = %s;
                   """
